@@ -206,7 +206,7 @@ def train(
         # Calculating MSE Loss for the predicted HyperNetwork weights
         hn_loss = 0.0
         for key in weights.keys():
-            weight_loss = nn.MSELoss()(inner_state[key], final_state[key])
+            weight_loss = nn.MSELoss(reduction="sum")(inner_state[key], final_state[key])
             hn_loss += weight_loss
 
         hn_loss.backward()

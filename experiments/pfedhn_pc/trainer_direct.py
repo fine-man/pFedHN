@@ -131,7 +131,15 @@ def train(data_name: str, data_path: str, classes_per_node: int, num_nodes: int,
 
         # produce & load local network weights
         weights = hnet(torch.tensor([node_id], dtype=torch.long).to(device))
-        net.load_state_dict(weights)
+        # net.load_state_dict(weights)
+        
+        # now we will put the weights into 'net', but such that the gradients are still calculated for the weights of 'hnet'
+        # we will not copy but directly put the values
+        
+        for n, p in net.named_parameters():
+            p.data = weights[n].data
+
+                
 
         # init inner optimizer
         inner_optim = torch.optim.SGD(
@@ -139,7 +147,7 @@ def train(data_name: str, data_path: str, classes_per_node: int, num_nodes: int,
         )
 
         # storing theta_i for later calculating delta theta
-        inner_state = OrderedDict({k: tensor.data for k, tensor in weights.items()})
+        # inner_state = OrderedDict({k: tensor.data for k, tensor in weights.items()})
 
         # NOTE: evaluation on sent model
         with torch.no_grad():
@@ -176,16 +184,16 @@ def train(data_name: str, data_path: str, classes_per_node: int, num_nodes: int,
         final_state = net.state_dict()
 
         # calculating delta theta
-        delta_theta = OrderedDict({k: inner_state[k] - final_state[k] for k in weights.keys()})
+        # delta_theta = OrderedDict({k: inner_state[k] - final_state[k] for k in weights.keys()})
 
         # calculating phi gradient
-        hnet_grads = torch.autograd.grad(
-            list(weights.values()), hnet.parameters(), grad_outputs=list(delta_theta.values())
-        )
+        # hnet_grads = torch.autograd.grad(
+        #     list(weights.values()), hnet.parameters(), grad_outputs=list(delta_theta.values())
+        # )
 
         # update hnet weights
-        for p, g in zip(hnet.parameters(), hnet_grads):
-            p.grad = g
+        # for p, g in zip(hnet.parameters(), hnet_grads):
+        #     p.grad = g
 
         torch.nn.utils.clip_grad_norm_(hnet.parameters(), 50)
         optimizer.step()
