@@ -7,118 +7,89 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.utils.data
 from tqdm import trange
+import torch.nn as nn
 import wandb
 import os
 
-from experiments.pfedhn_pc.models import CNNHyperPC, CNNTargetPC, LocalLayer
-from experiments.pfedhn_pc.node import BaseNodesForLocal
+from experiments.pfedhn.models import CNNHyper, CNNTarget
+from experiments.pfedhn.node import BaseNodes
 from experiments.utils import get_device, set_logger, set_seed, str2bool
 
 if os.path.exists("./config.py"):
     from config import DATA_USER, HOME_USER, WANDB_API_KEY
 
-
 def eval_model(nodes, num_nodes, hnet, net, criteria, device, split):
     curr_results = evaluate(nodes, num_nodes, hnet, net, criteria, device, split=split)
-    total_correct = sum([val["correct"] for val in curr_results.values()])
-    total_samples = sum([val["total"] for val in curr_results.values()])
-    avg_loss = np.mean([val["loss"] for val in curr_results.values()])
+    total_correct = sum([val['correct'] for val in curr_results.values()])
+    total_samples = sum([val['total'] for val in curr_results.values()])
+    avg_loss = np.mean([val['loss'] for val in curr_results.values()])
     avg_acc = total_correct / total_samples
 
-    all_acc = [val["correct"] / val["total"] for val in curr_results.values()]
+    all_acc = [val['correct'] / val['total'] for val in curr_results.values()]
 
     return curr_results, avg_loss, avg_acc, all_acc
 
 
 @torch.no_grad()
-def evaluate(
-    nodes: BaseNodesForLocal, num_nodes, hnet, net, criteria, device, split="test"
-):
+def evaluate(nodes: BaseNodes, num_nodes, hnet, net, criteria, device, split='test'):
     hnet.eval()
     results = defaultdict(lambda: defaultdict(list))
 
     for node_id in range(num_nodes):  # iterating over nodes
-        running_loss, running_correct, running_samples = 0.0, 0.0, 0.0
-        if split == "test":
+
+        running_loss, running_correct, running_samples = 0., 0., 0.
+        if split == 'test':
             curr_data = nodes.test_loaders[node_id]
-        elif split == "val":
+        elif split == 'val':
             curr_data = nodes.val_loaders[node_id]
         else:
             curr_data = nodes.train_loaders[node_id]
 
-        weights = hnet(torch.tensor([node_id], dtype=torch.long).to(device))
-        net.load_state_dict(weights)
-
         for batch_count, batch in enumerate(curr_data):
             img, label = tuple(t.to(device) for t in batch)
-            net_out = net(img)
-            pred = nodes.local_layers[node_id](net_out)
+
+            weights = hnet(torch.tensor([node_id], dtype=torch.long).to(device))
+            net.load_state_dict(weights)
+            pred = net(img)
             running_loss += criteria(pred, label).item()
             running_correct += pred.argmax(1).eq(label).sum().item()
             running_samples += len(label)
 
-        results[node_id]["loss"] = running_loss / (batch_count + 1)
-        results[node_id]["correct"] = running_correct
-        results[node_id]["total"] = running_samples
+        results[node_id]['loss'] = running_loss / (batch_count + 1)
+        results[node_id]['correct'] = running_correct
+        results[node_id]['total'] = running_samples
 
     return results
 
 
-def train_mse(
-    data_name: str,
-    data_path: str,
-    classes_per_node: int,
-    num_nodes: int,
-    steps: int,
-    inner_steps: int,
-    optim: str,
-    lr: float,
-    inner_lr: float,
-    embed_lr: float,
-    wd: float,
-    inner_wd: float,
-    embed_dim: int,
-    hyper_hid: int,
-    n_hidden: int,
-    n_kernels: int,
-    bs: int,
-    device,
-    eval_every: int,
-    save_path: Path,
-) -> None:
+def train_mse(data_name: str, data_path: str, classes_per_node: int, num_nodes: int,
+          steps: int, inner_steps: int, optim: str, lr: float, inner_lr: float,
+          embed_lr: float, wd: float, inner_wd: float, embed_dim: int, hyper_hid: int,
+          n_hidden: int, n_kernels: int, bs: int, device, eval_every: int, save_path: Path,
+          seed: int) -> None:
+
     ###############################
     # init nodes, hnet, local net #
     ###############################
-
-    nodes = BaseNodesForLocal(
-        data_name=data_name,
-        data_path=data_path,
-        n_nodes=num_nodes,
-        base_layer=LocalLayer,
-        layer_config={"n_input": 84, "n_output": 10 if data_name == "cifar10" else 100},
-        base_optimizer=torch.optim.SGD,
-        optimizer_config=dict(lr=inner_lr, momentum=0.9, weight_decay=inner_wd),
-        device=device,
-        batch_size=bs,
-        classes_per_node=classes_per_node,
-    )
+    nodes = BaseNodes(data_name, data_path, num_nodes, classes_per_node=classes_per_node,
+                      batch_size=bs)
 
     embed_dim = embed_dim
     if embed_dim == -1:
         logging.info("auto embedding size")
         embed_dim = int(1 + num_nodes / 4)
 
-    hnet = CNNHyperPC(
-        num_nodes,
-        embed_dim,
-        hidden_dim=hyper_hid,
-        n_hidden=n_hidden,
-        n_kernels=n_kernels,
-    )
-    net = CNNTargetPC(n_kernels=n_kernels)
+    if data_name == "cifar10":
+        hnet = CNNHyper(num_nodes, embed_dim, hidden_dim=hyper_hid, n_hidden=n_hidden, n_kernels=n_kernels)
+        net = CNNTarget(n_kernels=n_kernels)
+    elif data_name == "cifar100":
+        hnet = CNNHyper(num_nodes, embed_dim, hidden_dim=hyper_hid,
+                        n_hidden=n_hidden, n_kernels=n_kernels, out_dim=100)
+        net = CNNTarget(n_kernels=n_kernels, out_dim=100)
+    else:
+        raise ValueError("choose data_name from ['cifar10', 'cifar100']")
 
     hnet = hnet.to(device)
     net = net.to(device)
@@ -128,19 +99,13 @@ def train_mse(
     ##################
     embed_lr = embed_lr if embed_lr is not None else lr
     optimizers = {
-        "sgd": torch.optim.SGD(
+        'sgd': torch.optim.SGD(
             [
-                {"params": [p for n, p in hnet.named_parameters() if "embed" not in n]},
-                {
-                    "params": [p for n, p in hnet.named_parameters() if "embed" in n],
-                    "lr": embed_lr,
-                },
-            ],
-            lr=lr,
-            momentum=0.9,
-            weight_decay=wd,
+                {'params': [p for n, p in hnet.named_parameters() if 'embed' not in n]},
+                {'params': [p for n, p in hnet.named_parameters() if 'embed' in n], 'lr': embed_lr}
+            ], lr=lr, momentum=0.9, weight_decay=wd
         ),
-        "adam": torch.optim.Adam(params=hnet.parameters(), lr=lr),
+        'adam': torch.optim.Adam(params=hnet.parameters(), lr=lr)
     }
     optimizer = optimizers[optim]
     criteria = torch.nn.CrossEntropyLoss()
@@ -168,7 +133,7 @@ def train_mse(
 
         # init inner optimizer
         inner_optim = torch.optim.SGD(
-            net.parameters(), lr=inner_lr, momentum=0.9, weight_decay=inner_wd
+            net.parameters(), lr=inner_lr, momentum=.9, weight_decay=inner_wd
         )
 
         # storing theta_i for later calculating delta theta
@@ -179,8 +144,7 @@ def train_mse(
             net.eval()
             batch = next(iter(nodes.test_loaders[node_id]))
             img, label = tuple(t.to(device) for t in batch)
-            net_out = net(img)
-            pred = nodes.local_layers[node_id](net_out)
+            pred = net(img)
             prvs_loss = criteria(pred, label)
             prvs_acc = pred.argmax(1).eq(label).sum().item() / len(label)
             net.train()
@@ -190,19 +154,17 @@ def train_mse(
             net.train()
             inner_optim.zero_grad()
             optimizer.zero_grad()
-            nodes.local_optimizers[node_id].zero_grad()
 
             batch = next(iter(nodes.train_loaders[node_id]))
             img, label = tuple(t.to(device) for t in batch)
 
-            net_out = net(img)
-            pred = nodes.local_layers[node_id](net_out)
+            pred = net(img)
 
             loss = criteria(pred, label)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), 50)
+
             inner_optim.step()
-            nodes.local_optimizers[node_id].step()
 
         optimizer.zero_grad()
 
@@ -211,21 +173,17 @@ def train_mse(
         # Calculating MSE Loss for the predicted HyperNetwork weights
         hn_loss = 0.0
         for key in weights.keys():
-            weight_loss = nn.MSELoss(reduction='sum')(inner_state[key], final_state[key])
+            weight_loss = nn.MSELoss()(inner_state[key], final_state[key])
             hn_loss += weight_loss
 
         hn_loss.backward()
 
         # # calculating delta theta
-        # delta_theta = OrderedDict(
-        #     {k: inner_state[k] - final_state[k] for k in weights.keys()}
-        # )
+        # delta_theta = OrderedDict({k: inner_state[k] - final_state[k] for k in weights.keys()})
 
         # # calculating phi gradient
         # hnet_grads = torch.autograd.grad(
-        #     list(weights.values()),
-        #     hnet.parameters(),
-        #     grad_outputs=list(delta_theta.values()),
+        #     list(weights.values()), hnet.parameters(), grad_outputs=list(delta_theta.values())
         # )
 
         # # update hnet weights
@@ -241,19 +199,13 @@ def train_mse(
 
         if step % eval_every == 0:
             last_eval = step
-            step_results, avg_loss, avg_acc, all_acc = eval_model(
-                nodes, num_nodes, hnet, net, criteria, device, split="test"
-            )
-            logging.info(
-                f"\nStep: {step+1}, AVG Loss: {avg_loss:.4f},  AVG Acc: {avg_acc:.4f},  HN Loss: {hn_loss}"
-            )
+            step_results, avg_loss, avg_acc, all_acc = eval_model(nodes, num_nodes, hnet, net, criteria, device, split="test")
+            logging.info(f"\nStep: {step+1}, AVG Loss: {avg_loss:.4f},  AVG Acc: {avg_acc:.4f}, HN Loss: {hn_loss}")
 
-            results["test_avg_loss"].append(avg_loss)
-            results["test_avg_acc"].append(avg_acc)
+            results['test_avg_loss'].append(avg_loss)
+            results['test_avg_acc'].append(avg_acc)
 
-            _, val_avg_loss, val_avg_acc, _ = eval_model(
-                nodes, num_nodes, hnet, net, criteria, device, split="val"
-            )
+            _, val_avg_loss, val_avg_acc, _ = eval_model(nodes, num_nodes, hnet, net, criteria, device, split="val")
             if best_acc < val_avg_acc:
                 best_acc = val_avg_acc
                 best_step = step
@@ -262,17 +214,15 @@ def train_mse(
                 test_best_max_based_on_step = np.max(all_acc)
                 test_best_std_based_on_step = np.std(all_acc)
 
-            results["val_avg_loss"].append(val_avg_loss)
-            results["val_avg_acc"].append(val_avg_acc)
-            results["best_step"].append(best_step)
-            results["best_val_acc"].append(best_acc)
-            results["best_test_acc_based_on_val_beststep"].append(
-                test_best_based_on_step
-            )
-            results["test_best_min_based_on_step"].append(test_best_min_based_on_step)
-            results["test_best_max_based_on_step"].append(test_best_max_based_on_step)
-            results["test_best_std_based_on_step"].append(test_best_std_based_on_step)
-        
+            results['val_avg_loss'].append(val_avg_loss)
+            results['val_avg_acc'].append(val_avg_acc)
+            results['best_step'].append(best_step)
+            results['best_val_acc'].append(best_acc)
+            results['best_test_acc_based_on_val_beststep'].append(test_best_based_on_step)
+            results['test_best_min_based_on_step'].append(test_best_min_based_on_step)
+            results['test_best_max_based_on_step'].append(test_best_max_based_on_step)
+            results['test_best_std_based_on_step'].append(test_best_std_based_on_step)
+
             # Wandb logging
             wandb_dict = defaultdict(int)
             wandb_dict["step"] = step
@@ -288,18 +238,12 @@ def train_mse(
             wandb.log(weights_dict)
 
     if step != last_eval:
-        _, val_avg_loss, val_avg_acc, _ = eval_model(
-            nodes, num_nodes, hnet, net, criteria, device, split="val"
-        )
-        step_results, avg_loss, avg_acc, all_acc = eval_model(
-            nodes, num_nodes, hnet, net, criteria, device, split="test"
-        )
-        logging.info(
-            f"\nStep: {step + 1}, AVG Loss: {avg_loss:.4f},  AVG Acc: {avg_acc:.4f}"
-        )
+        _, val_avg_loss, val_avg_acc, _ = eval_model(nodes, num_nodes, hnet, net, criteria, device, split="val")
+        step_results, avg_loss, avg_acc, all_acc = eval_model(nodes, num_nodes, hnet, net, criteria, device, split="test")
+        logging.info(f"\nStep: {step + 1}, AVG Loss: {avg_loss:.4f},  AVG Acc: {avg_acc:.4f}")
 
-        results["test_avg_loss"].append(avg_loss)
-        results["test_avg_acc"].append(avg_acc)
+        results['test_avg_loss'].append(avg_loss)
+        results['test_avg_acc'].append(avg_acc)
 
         if best_acc < val_avg_acc:
             best_acc = val_avg_acc
@@ -309,116 +253,83 @@ def train_mse(
             test_best_max_based_on_step = np.max(all_acc)
             test_best_std_based_on_step = np.std(all_acc)
 
-        results["val_avg_loss"].append(val_avg_loss)
-        results["val_avg_acc"].append(val_avg_acc)
-        results["best_step"].append(best_step)
-        results["best_val_acc"].append(best_acc)
-        results["best_test_acc_based_on_val_beststep"].append(test_best_based_on_step)
-        results["test_best_min_based_on_step"].append(test_best_min_based_on_step)
-        results["test_best_max_based_on_step"].append(test_best_max_based_on_step)
-        results["test_best_std_based_on_step"].append(test_best_std_based_on_step)
+        results['val_avg_loss'].append(val_avg_loss)
+        results['val_avg_acc'].append(val_avg_acc)
+        results['best_step'].append(best_step)
+        results['best_val_acc'].append(best_acc)
+        results['best_test_acc_based_on_val_beststep'].append(test_best_based_on_step)
+        results['test_best_min_based_on_step'].append(test_best_min_based_on_step)
+        results['test_best_max_based_on_step'].append(test_best_max_based_on_step)
+        results['test_best_std_based_on_step'].append(test_best_std_based_on_step)
 
     save_path = Path(save_path)
     save_path.mkdir(parents=True, exist_ok=True)
-    with open(str(save_path / "results.json"), "w") as file:
+    with open(str(save_path / f"results_{inner_steps}_inner_steps_seed_{seed}.json"), "w") as file:
         json.dump(results, file, indent=4)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description="Federated Hypernetwork with local layers experiment"
+        description="Federated Hypernetwork with Lookahead experiment"
     )
 
     #############################
     #       Dataset Args        #
     #############################
+
     parser.add_argument(
-        "--data-name",
-        type=str,
-        default="cifar10",
-        choices=["cifar10", "cifar100"],
-        help="data name",
+        "--data-name", type=str, default="cifar10", choices=['cifar10', 'cifar100'], help="dir path for MNIST dataset"
     )
-    parser.add_argument("--data-path", type=str, default="data", help="data path")
-    parser.add_argument("--num-nodes", type=int, default=50)
+    parser.add_argument("--data-path", type=str, default="data", help="dir path for MNIST dataset")
+    parser.add_argument("--num-nodes", type=int, default=50, help="number of simulated nodes")
 
     ##################################
     #       Optimization args        #
     ##################################
+
     parser.add_argument("--num-steps", type=int, default=5000)
+    parser.add_argument("--optim", type=str, default='sgd', choices=['adam', 'sgd'], help="learning rate")
     parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument(
-        "--inner-steps", type=int, default=50, help="number of inner steps"
-    )
-    parser.add_argument(
-        "--optim",
-        type=str,
-        default="sgd",
-        choices=["adam", "sgd"],
-        help="learning rate",
-    )
+    parser.add_argument("--inner-steps", type=int, default=50, help="number of inner steps")
 
     ################################
     #       Model Prop args        #
     ################################
     parser.add_argument("--n-hidden", type=int, default=3, help="num. hidden layers")
-    parser.add_argument(
-        "--inner-lr", type=float, default=5e-3, help="learning rate for inner optimizer"
-    )
-    parser.add_argument("--lr", type=float, default=5e-2, help="learning rate")
+    parser.add_argument("--inner-lr", type=float, default=5e-3, help="learning rate for inner optimizer")
+    parser.add_argument("--lr", type=float, default=1e-2, help="learning rate")
     parser.add_argument("--wd", type=float, default=1e-3, help="weight decay")
-    parser.add_argument(
-        "--inner-wd", type=float, default=5e-5, help="inner weight decay"
-    )
+    parser.add_argument("--inner-wd", type=float, default=5e-5, help="inner weight decay")
     parser.add_argument("--embed-dim", type=int, default=-1, help="embedding dim")
-    parser.add_argument(
-        "--embed-lr", type=float, default=None, help="embedding learning rate"
-    )
-    parser.add_argument(
-        "--hyper-hid", type=int, default=100, help="hypernet hidden dim"
-    )
-    parser.add_argument(
-        "--spec-norm", type=str2bool, default=False, help="hypernet hidden dim"
-    )
-    parser.add_argument(
-        "--nkernels", type=int, default=16, help="number of kernels for cnn model"
-    )
+    parser.add_argument("--embed-lr", type=float, default=None, help="embedding learning rate")
+    parser.add_argument("--hyper-hid", type=int, default=100, help="hypernet hidden dim")
+    parser.add_argument("--spec-norm", type=str2bool, default=False, help="hypernet hidden dim")
+    parser.add_argument("--nkernels", type=int, default=16, help="number of kernels for cnn model")
 
     #############################
     #       General args        #
     #############################
     parser.add_argument("--gpu", type=int, default=0, help="gpu device ID")
-    parser.add_argument(
-        "--eval-every", type=int, default=5, help="eval every X selected epochs"
-    )
-    parser.add_argument(
-        "--save-path",
-        type=str,
-        default="pfedhn_pc_cifar_res",
-        help="dir path for output file",
-    )
+    parser.add_argument("--eval-every", type=int, default=5, help="eval every X selected epochs")
+    parser.add_argument("--save-path", type=str, default="pfedhn_hetro_res", help="dir path for output file")
     parser.add_argument("--seed", type=int, default=42, help="seed value")
 
     args = parser.parse_args()
-    assert (
-        args.gpu <= torch.cuda.device_count()
-    ), f"--gpu flag should be in range [0,{torch.cuda.device_count() - 1}]"
+    assert args.gpu <= torch.cuda.device_count(), f"--gpu flag should be in range [0,{torch.cuda.device_count() - 1}]"
 
     set_logger()
     set_seed(args.seed)
 
     device = get_device(gpus=args.gpu)
 
-    if args.data_name == "cifar10":
+    if args.data_name == 'cifar10':
         args.classes_per_node = 2
     else:
         args.classes_per_node = 10
-
     
     wandb.login(key=WANDB_API_KEY)
-    run_name = "MSE_LOSS Sum with HN Loss"
-    project_name = "pfedhn_pc"
-    run = wandb.init(project=project_name, name=run_name)
+    run_name = "MSE_LOSS with HN Loss"
+    run = wandb.init(project="pfedhn", name=run_name)
 
     train_mse(
         data_name=args.data_name,
@@ -441,4 +352,5 @@ if __name__ == "__main__":
         device=device,
         eval_every=args.eval_every,
         save_path=args.save_path,
+        seed=args.seed
     )

@@ -7,13 +7,18 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.utils.data
 from tqdm import trange
+import wandb
+import os
 
 from experiments.pfedhn_pc.models import CNNHyperPC, CNNTargetPC, LocalLayer
 from experiments.pfedhn_pc.node import BaseNodesForLocal
 from experiments.utils import get_device, set_logger, set_seed, str2bool
 
+if os.path.exists("./config.py"):
+    from config import DATA_USER, HOME_USER, WANDB_API_KEY
 
 def eval_model(nodes, num_nodes, hnet, net, criteria, device, split):
     curr_results = evaluate(nodes, num_nodes, hnet, net, criteria, device, split=split)
@@ -175,6 +180,12 @@ def train(data_name: str, data_path: str, classes_per_node: int, num_nodes: int,
 
         final_state = net.state_dict()
 
+        # Calculating MSE Loss for the predicted HyperNetwork weights
+        hn_loss = 0.0
+        for key in weights.keys():
+            weight_loss = nn.MSELoss(reduction='sum')(inner_state[key], final_state[key])
+            hn_loss += weight_loss
+
         # calculating delta theta
         delta_theta = OrderedDict({k: inner_state[k] - final_state[k] for k in weights.keys()})
 
@@ -199,7 +210,7 @@ def train(data_name: str, data_path: str, classes_per_node: int, num_nodes: int,
             step_results, avg_loss, avg_acc, all_acc = eval_model(
                 nodes, num_nodes, hnet, net, criteria, device, split="test"
             )
-            logging.info(f"\nStep: {step+1}, AVG Loss: {avg_loss:.4f},  AVG Acc: {avg_acc:.4f}")
+            logging.info(f"\nStep: {step+1}, AVG Loss: {avg_loss:.4f},  AVG Acc: {avg_acc:.4f}, HN Loss: {hn_loss}")
 
             results['test_avg_loss'].append(avg_loss)
             results['test_avg_acc'].append(avg_acc)
@@ -221,6 +232,21 @@ def train(data_name: str, data_path: str, classes_per_node: int, num_nodes: int,
             results['test_best_min_based_on_step'].append(test_best_min_based_on_step)
             results['test_best_max_based_on_step'].append(test_best_max_based_on_step)
             results['test_best_std_based_on_step'].append(test_best_std_based_on_step)
+        
+            # Wandb logging
+            wandb_dict = defaultdict(int)
+            wandb_dict["step"] = step
+            wandb_dict["hn_loss"] = hn_loss.detach().item()
+            # log the absolute value of the weights at each point
+            for key, value_list in results.items():
+                wandb_dict[key] = value_list[-1]
+            wandb.log(wandb_dict)
+
+            # Weights logging
+            weights_dict = defaultdict(int)
+            for name, param in hnet.named_parameters():
+                weights_dict[name] = param.detach().norm().item()
+            wandb.log(weights_dict)
 
     if step != last_eval:
         _, val_avg_loss, val_avg_acc, _ = eval_model(nodes, num_nodes, hnet, net, criteria, device, split="val")
@@ -293,7 +319,7 @@ if __name__ == '__main__':
     #       General args        #
     #############################
     parser.add_argument("--gpu", type=int, default=0, help="gpu device ID")
-    parser.add_argument("--eval-every", type=int, default=30, help="eval every X selected epochs")
+    parser.add_argument("--eval-every", type=int, default=5, help="eval every X selected epochs")
     parser.add_argument("--save-path", type=str, default="pfedhn_pc_cifar_res", help="dir path for output file")
     parser.add_argument("--seed", type=int, default=42, help="seed value")
 
@@ -309,6 +335,11 @@ if __name__ == '__main__':
         args.classes_per_node = 2
     else:
         args.classes_per_node = 10
+
+    wandb.login(key=WANDB_API_KEY)
+    run_name = "Manual Gradients with HN Loss Sum"
+    project_name = "pfedhn_pc"
+    run = wandb.init(project=project_name, name=run_name)
 
     train(
         data_name=args.data_name,

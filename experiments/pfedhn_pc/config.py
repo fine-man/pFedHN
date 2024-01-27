@@ -1,0 +1,3 @@
+DATA_USER = "akshat"
+HOME_USER = "vanshg"
+WANDB_API_KEY="8c09025842609f9e17e5aa0de5aa2ab26314a316"
