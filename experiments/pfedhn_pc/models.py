@@ -5,7 +5,7 @@ from torch.nn.utils import spectral_norm
 
 
 class LocalLayer(nn.Module):
-    def __init__(self, n_input=84, n_output=2, nonlinearity=False):
+    def __init__(self, n_input=84, n_output=2, nonlinearity=False): # n_ouptut is later changed to 10
         super().__init__()
         self.nonlinearity = nonlinearity
         layers = []
@@ -38,7 +38,9 @@ class CNNHyperPC(nn.Module):
         self.n_kernels = n_kernels
         self.embeddings = nn.Embedding(
             num_embeddings=n_nodes, embedding_dim=embedding_dim
-        )
+        ) # this is the embedding layer, which is basically a lookup table, which is used to get the embedding of the node
+        # these embeddings are initialized randomly, and are updated during training
+        # this is the v_i in the paper
 
         layers = [
             spectral_norm(nn.Linear(embedding_dim, hidden_dim))
@@ -79,7 +81,7 @@ class CNNHyperPC(nn.Module):
             self.l2_bias = spectral_norm(self.l2_bias)
 
     def forward(self, idx):
-        emd = self.embeddings(idx.to(torch.long))
+        emd = self.embeddings(idx.to(torch.long)) # so as to get the embedding of the node, idx basically is the node id?
         features = self.mlp(emd)
 
         weights = {
@@ -105,10 +107,10 @@ class CNNTargetPC(nn.Module):
     def __init__(self, in_channels=3, n_kernels=16):
         super().__init__()
 
-        self.conv1 = nn.Conv2d(in_channels, n_kernels, 5)
+        self.conv1 = nn.Conv2d(in_channels, n_kernels, 5) # n_kernels is the number of filters, basically the number of channels in the output
         self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(n_kernels, 2 * n_kernels, 5)
-        self.fc1 = nn.Linear(2 * n_kernels * 5 * 5, 120)
+        self.fc1 = nn.Linear(2 * n_kernels * 5 * 5, 120) # we flatten before sending here (in forward)
         self.fc2 = nn.Linear(120, 84)
 
     def forward(self, x):

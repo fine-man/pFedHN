@@ -1,0 +1,32 @@
+{
+    "test_avg_loss": [
+        2.3728468060493473
+    ],
+    "test_avg_acc": [
+        0.1265738899933731
+    ],
+    "val_avg_loss": [
+        2.3789613875746727
+    ],
+    "val_avg_acc": [
+        0.12153659344298488
+    ],
+    "best_step": [
+        0
+    ],
+    "best_val_acc": [
+        0.12153659344298488
+    ],
+    "best_test_acc_based_on_val_beststep": [
+        0.1265738899933731
+    ],
+    "test_best_min_based_on_step": [
+        0.0
+    ],
+    "test_best_max_based_on_step": [
+        0.6019900497512438
+    ],
+    "test_best_std_based_on_step": [
+        0.15746338696638038
+    ]
+}

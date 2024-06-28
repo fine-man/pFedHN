@@ -78,7 +78,7 @@ def get_num_classes_samples(dataset):
 
 
 def gen_classes_per_node(dataset, num_users, classes_per_user=2, high_prob=0.6, low_prob=0.4):
-    """
+    """ Section 5.1 (high_prob=0.6, low_prob=0.4)
     creates the data distribution of each client
     :param dataset: pytorch dataset object
     :param num_users: number of clients
@@ -105,12 +105,12 @@ def gen_classes_per_node(dataset, num_users, classes_per_user=2, high_prob=0.6, 
     # -------------------------------------#
     # Assign each client with data indexes #
     # -------------------------------------#
-    class_partitions = defaultdict(list)
+    class_partitions = defaultdict(list) # defaultdict is a subclass of dict, it has a default value for a key that has not been set yet
     for i in range(num_users):
         c = []
         for _ in range(classes_per_user):
             class_counts = [class_dict[i]['count'] for i in range(num_classes)]
-            max_class_counts = np.where(np.array(class_counts) == max(class_counts))[0]
+            max_class_counts = np.where(np.array(class_counts) == max(class_counts))[0] # why is this done?
             c.append(np.random.choice(max_class_counts))
             class_dict[c[-1]]['count'] -= 1
         class_partitions['class'].append(c)

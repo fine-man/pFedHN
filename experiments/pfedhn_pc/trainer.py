@@ -85,7 +85,7 @@ def train(data_name: str, data_path: str, classes_per_node: int, num_nodes: int,
         device=device,
         batch_size=bs,
         classes_per_node=classes_per_node,
-    )
+    ) # this is used in the eval_model function, and not in the train function, as this is only for the local layers
 
     embed_dim = embed_dim
     if embed_dim == -1:
@@ -125,7 +125,7 @@ def train(data_name: str, data_path: str, classes_per_node: int, num_nodes: int,
     best_acc = -1
     test_best_based_on_step, test_best_min_based_on_step = -1, -1
     test_best_max_based_on_step, test_best_std_based_on_step = -1, -1
-    step_iter = trange(steps)
+    step_iter = trange(steps) # trange is a tqdm wrapper for range
 
     results = defaultdict(list)
     for step in step_iter:
@@ -168,7 +168,7 @@ def train(data_name: str, data_path: str, classes_per_node: int, num_nodes: int,
             img, label = tuple(t.to(device) for t in batch)
 
             net_out = net(img)
-            pred = nodes.local_layers[node_id](net_out)
+            pred = nodes.local_layers[node_id](net_out) # this is the 'PC' part
 
             loss = criteria(pred, label)
             loss.backward()
